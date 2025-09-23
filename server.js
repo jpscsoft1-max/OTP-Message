@@ -1,114 +1,238 @@
-
 // require('dotenv').config();
-
 // const express = require('express');
 // const cors = require('cors');
-// const twilio = require('twilio');
+// const axios = require('axios');
 
 // const app = express();
 // app.use(cors());
 // app.use(express.json());
 
-// const accountSid = process.env.TWILIO_SID;
-// const authToken = process.env.TWILIO_TOKEN;
-// const twilioClient = twilio(accountSid, authToken);
+// const CUSTOMER_ID = 'C-0E536C63037446A';
+// const KEY = 'QWF5dXNoNDVA';
+// const API_BASE_URL = 'https://cpaas.messagecentral.com';
 
-// const otpMap = new Map();
+// let mcToken = null; // Store token temporarily
 
-// app.post('/send-otp', async (req, res) => {
-//   const { phone } = req.body;
-//   const otp = Math.floor(100000 + Math.random() * 900000).toString();
-
-//   console.log('Sending OTP to:', phone);
+// async function getAuthToken() {
+//   if (mcToken) return mcToken;
 
 //   try {
-//     const msg = await twilioClient.messages.create({
-//       body: `Your login OTP is ${otp}`,
-//       from: '+12567895845',
-//       to: phone
+//     const res = await axios.get(`${API_BASE_URL}/auth/v1/authentication/token`, {
+//       params: {
+//         country: 'IN',
+//         customerId: CUSTOMER_ID,
+//         key: KEY,
+//         scope: 'NEW'
+//       },
+//       headers: { accept: '*/*' }
+//     });
+//     mcToken = res.data.token;
+//     console.log('✅ New MessageCentral token generated:', mcToken);
+//     return mcToken;
+//   } catch (err) {
+//     console.error('❌ Error generating token:', err.response?.data || err.message);
+//     throw new Error('Failed to generate MessageCentral token');
+//   }
+// }
+
+// // Send OTP
+// app.post('/send-otp', async (req, res) => {
+//   const { phone } = req.body;
+//   if (!phone) return res.status(400).json({ success: false, message: 'Phone number required' });
+
+//   try {
+//     const token = await getAuthToken();
+//     const response = await axios.post(
+//       `${API_BASE_URL}/verification/v3/send`,
+//       {},
+//       {
+//         params: {
+//           countryCode: '91',
+//           customerId: CUSTOMER_ID,
+//           flowType: 'SMS',
+//           mobileNumber: phone
+//         },
+//         headers: { authToken: token }
+//       }
+//     );
+
+//     const verificationId = response.data.verificationId;
+//     res.json({ success: true, verificationId });
+//   } catch (err) {
+//     console.error('❌ Error sending OTP:', err.response?.data || err.message);
+//     res.status(500).json({ success: false, message: 'Failed to send OTP' });
+//   }
+// });
+
+// // Verify OTP
+// app.post('/verify-otp', async (req, res) => {
+//   const { phone, verificationId, otp } = req.body;
+//   if (!phone || !verificationId || !otp)
+//     return res.status(400).json({ success: false, message: 'Missing params' });
+
+//   try {
+//     const token = await getAuthToken();
+//     const response = await axios.get(`${API_BASE_URL}/verification/v3/validateOtp`, {
+//       params: {
+//         countryCode: '91',
+//         mobileNumber: phone,
+//         verificationId,
+//         customerId: CUSTOMER_ID,
+//         code: otp
+//       },
+//       headers: { authToken: token }
 //     });
 
-//     console.log('OTP sent:', msg.sid);
-
-//     otpMap.set(phone, otp);
-//     setTimeout(() => otpMap.delete(phone), 5 * 60 * 1000);
-
-//     res.json({ success: true, message: 'OTP sent' });
+//     if (response.data.status === 'VERIFICATION_COMPLETED') {
+//       res.json({ success: true, message: 'OTP verified' });
+//     } else {
+//       res.status(401).json({ success: false, message: 'Invalid OTP' });
+//     }
 //   } catch (err) {
-//     console.error('Error sending OTP:', err);
-//     res.status(500).json({ success: false, message: 'Failed to send OTP', error: err.message });
+//     console.error('❌ Error verifying OTP:', err.response?.data || err.message);
+//     res.status(500).json({ success: false, message: 'Failed to verify OTP' });
 //   }
 // });
 
-// app.post('/verify-otp', (req, res) => {
-//   const { phone, otp } = req.body;
-//   const validOtp = otpMap.get(phone);
-
-//   if (otp === validOtp) {
-//     otpMap.delete(phone);
-//     res.json({ success: true, message: 'OTP verified' });
-//   } else {
-//     res.status(401).json({ success: false, message: 'Invalid OTP' });
-//   }
-// });
-
+// app.get('/', (req, res) => res.send('🚀 Backend running ✅'));
 // app.listen(3001, () => console.log('🚀 Server running on port 3001'));
 require('dotenv').config();
-
 const express = require('express');
 const cors = require('cors');
-const twilio = require('twilio');
+const axios = require('axios');
+const NodeCache = require('node-cache');
 
 const app = express();
-app.use(cors());
+
+// ✅ Enable CORS for both local & deployed frontend
+app.use(cors({
+  origin: [
+    "http://localhost:3000",             // local React dev
+    "https://jpscube-management.netlify.app"  // replace with your deployed frontend URL (Netlify/Vercel)
+  ],
+  methods: ["GET", "POST"],
+  credentials: true
+}));
+
 app.use(express.json());
 
-const accountSid = process.env.TWILIO_SID;
-const authToken = process.env.TWILIO_TOKEN;
-const twilioClient = twilio(accountSid, authToken);
-
+// Cache token for 5 minutes
+const tokenCache = new NodeCache({ stdTTL: 5 * 60 });
 const otpMap = new Map();
 
-app.post('/send-otp', async (req, res) => {
-  const { phone } = req.body;
-  const otp = Math.floor(100000 + Math.random() * 900000).toString();
+const CUSTOMER_ID = process.env.CUSTOMER_ID;
+const KEY = process.env.KEY;
+const API_BASE_URL = 'https://cpaas.messagecentral.com';
 
-  console.log('Sending OTP to:', phone);
+// ✅ Generate new token if not cached
+async function getAuthToken() {
+  let token = tokenCache.get('mcToken');
+  if (token) return token;
 
   try {
-    const msg = await twilioClient.messages.create({
-      body: `Your login OTP is ${otp}`,
-      from: '+12567895845',
-      to: phone
+    const res = await axios.get(`${API_BASE_URL}/auth/v1/authentication/token`, {
+      params: {
+        country: 'IN',
+        customerId: CUSTOMER_ID,
+        key: KEY,
+        scope: 'NEW',
+      },
+      headers: { accept: '*/*' },
     });
 
-    console.log('OTP sent:', msg.sid);
+    token = res.data.token;
+    tokenCache.set('mcToken', token);
+    console.log('✅ New MessageCentral token generated');
+    return token;
+  } catch (err) {
+    console.error('❌ Error generating token:', err.response?.data || err.message);
+    throw new Error('Failed to generate MessageCentral token');
+  }
+}
 
-    otpMap.set(phone, otp);
+// ✅ Send OTP route
+app.post('/send-otp', async (req, res) => {
+  try {
+    let { phone } = req.body;
+    if (!phone) return res.status(400).json({ success: false, message: 'Phone number is required' });
+
+    // Normalize phone number
+    phone = phone.replace(/\D/g, ''); // keep digits only
+    if (phone.length !== 10) {
+      return res.status(400).json({ success: false, message: 'Invalid mobile number format' });
+    }
+
+    console.log('📨 Sending OTP to:', `+91${phone}`);
+
+    const token = await getAuthToken();
+
+    const sendResponse = await axios.post(`${API_BASE_URL}/verification/v3/send`, null, {
+      params: {
+        countryCode: '91',
+        customerId: CUSTOMER_ID,
+        flowType: 'SMS',
+        mobileNumber: phone, // just 10 digits
+      },
+      headers: { authToken: token },
+    });
+
+    const verificationId = sendResponse.data?.data?.verificationId;
+    if (!verificationId) throw new Error('No verificationId returned');
+
+    otpMap.set(phone, { verificationId, token });
     setTimeout(() => otpMap.delete(phone), 5 * 60 * 1000);
 
-    res.json({ success: true, message: 'OTP sent' });
+    console.log(`✅ OTP sent to +91${phone}, verificationId: ${verificationId}`);
+    res.json({ success: true, message: 'OTP sent', verificationId });
   } catch (err) {
-    console.error('Error sending OTP:', err);
-    res.status(500).json({ success: false, message: 'Failed to send OTP', error: err.message });
+    console.error('❌ Error sending OTP:', err.response?.data || err.message);
+    res.status(500).json({ success: false, message: 'Failed to send OTP' });
   }
 });
 
-app.post('/verify-otp', (req, res) => {
-  const { phone, otp } = req.body;
-  const validOtp = otpMap.get(phone);
+// ✅ Verify OTP route
+app.post('/verify-otp', async (req, res) => {
+  try {
+    let { phone, otp } = req.body;
+    phone = phone.replace(/\D/g, ''); // normalize
+    console.log('🔍 Verifying OTP for:', `+91${phone}`);
 
-  if (otp === validOtp) {
-    otpMap.delete(phone);
-    res.json({ success: true, message: 'OTP verified' });
-  } else {
-    res.status(401).json({ success: false, message: 'Invalid OTP' });
+    const entry = otpMap.get(phone);
+    if (!entry) return res.status(401).json({ success: false, message: 'OTP expired or not sent' });
+
+    const { verificationId, token } = entry;
+
+    const verifyResponse = await axios.get(`${API_BASE_URL}/verification/v3/validateOtp`, {
+      params: {
+        countryCode: '91',
+        mobileNumber: phone,
+        verificationId,
+        customerId: CUSTOMER_ID,
+        code: otp,
+      },
+      headers: { authToken: token },
+    });
+
+    const status = verifyResponse.data?.data?.verificationStatus;
+    console.log('🔍 Verification status:', status);
+
+    if (status === 'VERIFICATION_COMPLETED' || status === 'SUCCESS') {
+      otpMap.delete(phone);
+      console.log('✅ OTP verified successfully');
+      res.json({ success: true, message: 'OTP verified' });
+    } else {
+      console.log('❌ OTP verification failed');
+      res.status(401).json({ success: false, message: 'Invalid OTP' });
+    }
+  } catch (err) {
+    console.error('❌ Error verifying OTP:', err.response?.data || err.message);
+    res.status(500).json({ success: false, message: 'Failed to verify OTP' });
   }
 });
 
-// ✅ Add this health-check route
-app.get('/', (req, res) => {
-  res.send('Server is running ✅');
-});
+// ✅ Health check
+app.get('/', (req, res) => res.send('🚀 Backend is running ✅'));
 
-app.listen(3001, () => console.log('🚀 Server running on port 3001'));
+// Start server
+const PORT = process.env.PORT || 3001;
+app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
