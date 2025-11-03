@@ -107,12 +107,16 @@ const app = express();
 // ✅ Enable CORS for both local & deployed frontend
 app.use(cors({
   origin: [
-    "http://localhost:3000",             // local React dev
-    "https://jpscube-attendance-leave.netlify.app/"  // replace with your deployed frontend URL (Netlify/Vercel)
+    "http://localhost:3000",                    // local React dev
+    "https://jpscube-attendance-leave.netlify.app" // 🚫 no trailing slash here!
   ],
-  methods: ["GET", "POST"],
-  credentials: true
+  methods: ["GET", "POST", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"],
+  credentials: true,
 }));
+
+// ✅ Explicitly handle preflight requests
+app.options('*', cors());
 
 app.use(express.json());
 
@@ -171,7 +175,7 @@ app.post('/send-otp', async (req, res) => {
         countryCode: '91',
         customerId: CUSTOMER_ID,
         flowType: 'SMS',
-        mobileNumber: phone, // just 10 digits
+        mobileNumber: phone,
       },
       headers: { authToken: token },
     });
